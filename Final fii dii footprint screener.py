@@ -11,50 +11,29 @@ REFRESH_INTERVAL_MIN = 5
 ENABLE_TELEGRAM = True
 TELEGRAM_TOKEN = "7735892458:AAELFRclang2MgJwO2Rd9RRwNmoll1LzlFg"
 TELEGRAM_CHAT_ID = "5073531512"
-ALERT_LOG_FILE = "fii_dii_alert_log.json"
+ALERT_LOG_FILE = "alert_log.json"
 
 st.set_page_config(layout="wide", page_title="FII/DII Footprint Screener")
-st.title("📊 FII/DII Footprint Screener Dashboard")
-st.caption(f"🔁 Auto-refresh every {REFRESH_INTERVAL_MIN} minutes.")
+st.title("\U0001F4CA FII/DII Footprint Screener Dashboard")
+st.caption(f"\U0001F501 Auto-refresh every {REFRESH_INTERVAL_MIN} minutes.")
 
-symbols = [
-    "RELIANCE", "HDFCBANK", "INFY", "TCS", "ICICIBANK",
+symbols = [    "RELIANCE", "HDFCBANK", "INFY", "TCS", "ICICIBANK",
     "LT", "SBIN", "KOTAKBANK", "AXISBANK", "BSE",
     "BHARTIARTL", "TITAN", "ASIANPAINT", "OFSS", "MARUTI",
     "BOSCHLTD", "TRENT", "NESTLEIND", "ULTRACEMCO", "MCX",
     "CAMS", "COFORGE","HAL","KEI"
 ]
 
-# --- ALERT LOG ---
-def load_alert_log():
-    if os.path.exists(ALERT_LOG_FILE):
-        with open(ALERT_LOG_FILE, "r") as f:
-            return json.load(f)
-    return {}
+# Load alert log to prevent duplicate alerts
+if os.path.exists(ALERT_LOG_FILE):
+    with open(ALERT_LOG_FILE, "r") as f:
+        alert_log = json.load(f)
+else:
+    alert_log = {}
 
 def save_alert_log(log):
     with open(ALERT_LOG_FILE, "w") as f:
         json.dump(log, f)
-
-alert_log = load_alert_log()
-
-# --- TECHNICAL FUNCTIONS ---
-def compute_rsi(series, period=14):
-    delta = series.diff()
-    gain = delta.where(delta > 0, 0)
-    loss = -delta.where(delta < 0, 0)
-    avg_gain = gain.rolling(window=period).mean()
-    avg_loss = loss.rolling(window=period).mean()
-    rs = avg_gain / avg_loss
-    return 100 - (100 / (1 + rs))
-
-def send_telegram_alert(message):
-    try:
-        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-        payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message, "parse_mode": "Markdown"}
-        requests.post(url, data=payload)
-    except Exception:
-        st.warning("⚠️ Telegram alert failed.")
 
 @st.cache_data(ttl=REFRESH_INTERVAL_MIN * 60)
 def fetch_data(symbol):
@@ -86,26 +65,28 @@ def fetch_data(symbol):
         rsi_signal = "Overbought" if rsi > 70 else "Oversold" if rsi < 30 else "Neutral"
         macd_signal_type = "Bullish" if macd > macd_signal else "Bearish"
 
+        long_buildup = today_close > prev_close and today_volume > avg_volume
+        short_buildup = today_close < prev_close and today_volume > avg_volume
+
         signal = "BUY" if all([breakout, volume_surge, price_strength, macd > macd_signal]) else \
                  "SELL" if price_strength and macd < macd_signal else "AVOID"
-        action = "📈 Buy" if signal == "BUY" else "📉 Sell" if signal == "SELL" else "⏸️ Wait"
+        action = "\U0001F4C8 Buy" if signal == "BUY" else "\U0001F4C9 Sell" if signal == "SELL" else "\u23F8\uFE0F Wait"
 
-        # Alert Key
         alert_key = f"{symbol}_{signal}"
-        if ENABLE_TELEGRAM and signal in ["BUY", "SELL"]:
-            last_alert_time = alert_log.get(alert_key)
-            if not last_alert_time:
-                msg = f"""🧠 *FII/DII Footprint Alert*
-*{symbol}* 🔹 {signal}
+        if ENABLE_TELEGRAM and signal in ["BUY", "SELL"] and alert_key not in alert_log:
+            msg = f"""\U0001F9E0 *FII/DII Footprint Alert*
+*{symbol}* \u25B6\uFE0F {signal}
 CMP: ₹{today_close:.2f}
 Volume: {int(today_volume):,} (Avg: {int(avg_volume):,})
 Delivery%: {delivery_perc}%
-Breakout: {"✅" if breakout else "❌"}
+Breakout: {"\u2705" if breakout else "\u274C"}
 MACD: {macd_signal_type}
 RSI: {rsi_signal}
+Long Buildup: {"\u2705" if long_buildup else "-"}
+Short Buildup: {"\u2705" if short_buildup else "-"}
 Action: {action}"""
-                send_telegram_alert(msg)
-                alert_log[alert_key] = str(datetime.datetime.now())
+            send_telegram_alert(msg)
+            alert_log[alert_key] = str(datetime.datetime.now())
 
         return {
             "Symbol": symbol,
@@ -119,16 +100,35 @@ Action: {action}"""
             "Price Strength": price_strength,
             "MACD": macd_signal_type,
             "RSI": rsi_signal,
+            "Long Buildup": "\u2705" if long_buildup else "",
+            "Short Buildup": "\u2705" if short_buildup else "",
             "Signal": signal,
             "Action": action
         }
 
     except Exception:
-        st.warning(f"⚠️ Failed to fetch data for {symbol}")
+        st.warning(f"\u26A0\uFE0F Failed to fetch data for {symbol}")
         return None
 
+def compute_rsi(series, period=14):
+    delta = series.diff()
+    gain = delta.where(delta > 0, 0)
+    loss = -delta.where(delta < 0, 0)
+    avg_gain = gain.rolling(window=period).mean()
+    avg_loss = loss.rolling(window=period).mean()
+    rs = avg_gain / avg_loss
+    return 100 - (100 / (1 + rs))
+
+def send_telegram_alert(message):
+    try:
+        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+        payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message, "parse_mode": "Markdown"}
+        requests.post(url, data=payload)
+    except Exception:
+        st.warning("\u26A0\uFE0F Telegram alert failed.")
+
 # --- MAIN VIEW ---
-st.markdown("### 🔍 Screener Results")
+st.markdown("### \U0001F50D Screener Results")
 results = []
 
 for symbol in symbols:
@@ -147,18 +147,17 @@ if results:
     styled_df = df.style.map(highlight_missing)
     st.dataframe(styled_df, use_container_width=True)
 
-    st.download_button("📥 Download CSV", data=df.to_csv(index=False), file_name="fii_dii_signals.csv")
+    st.download_button("\U0001F4C5 Download CSV", data=df.to_csv(index=False), file_name="fii_dii_signals.csv")
 else:
-    st.warning("⚠️ No data returned or API limit reached.")
+    st.warning("\u26A0\uFE0F No data returned or API limit reached.")
 
-# --- Auto-refresh ---
-st.caption(f"🕒 Last updated: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-refresh_ms = REFRESH_INTERVAL_MIN * 60 * 1000
+# --- Auto-refresh JS ---
+st.caption(f"\U0001F552 Last updated: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
 st.markdown(f"""
-<script>
-    setTimeout(function() {{
-        window.location.reload();
-    }}, {refresh_ms});
-</script>
+    <script>
+        setTimeout(function() {{
+            window.location.reload();
+        }}, {REFRESH_INTERVAL_MIN * 60 * 1000});
+    </script>
 """, unsafe_allow_html=True)
