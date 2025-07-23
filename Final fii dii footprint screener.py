@@ -378,7 +378,7 @@ if not df_result.empty and "Breakout Type" in df_result.columns:
 
         for row in double_breakouts.itertuples():
             if row.Stock not in emailed_stocks:
-                send_email_alert(row.Stock)
+    #==         send_email_alert(row.Stock)
                 send_telegram_alert(f"🟢 DOUBLE BREAKOUT in {row.Stock} ✅ CMP: {row.CMP}")
                 save_emailed_stock(row.Stock)
                 emailed_stocks.add(row.Stock)
