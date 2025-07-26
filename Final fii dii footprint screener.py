@@ -18,7 +18,7 @@ st.title("\U0001F4CA FII/DII Footprint Screener Dashboard")
 st.caption(f"\U0001F501 Auto-refresh every {REFRESH_INTERVAL_MIN} minutes.")
 
 symbols = [    "RELIANCE", "HDFCBANK", "INFY", "TCS", "ICICIBANK",
-    "LT", "SBIN", "KOTAKBANK", "AXISBANK", "BSE",
+    "LT", "SBIN", "KOTAKBANK", "AXISBANK", "BSE","SIEMENS",
     "BHARTIARTL", "TITAN", "ASIANPAINT", "OFSS", "MARUTI",
     "BOSCHLTD", "TRENT", "NESTLEIND", "ULTRACEMCO", "MCX",
     "CAMS", "COFORGE","HAL","KEI"
@@ -184,7 +184,7 @@ st.title("📈 Intraday Breakout Screener with MACD (Live)")
 index_list = ["^NSEI", "^NSEBANK"]
 stock_list = [
     "RELIANCE.NS", "HDFCBANK.NS", "INFY.NS", "TCS.NS", "ICICIBANK.NS",
-    "LT.NS", "SBIN.NS", "KOTAKBANK.NS", "AXISBANK.NS", "BSE.NS",
+    "LT.NS", "SBIN.NS", "KOTAKBANK.NS", "AXISBANK.NS", "BSE.NS","SIEMENS.NS"
     "BHARTIARTL.NS", "TITAN.NS", "ASIANPAINT.NS", "OFSS.NS", "MARUTI.NS",
     "BOSCHLTD.NS", "TRENT.NS", "NESTLEIND.NS", "ULTRACEMCO.NS", "MCX.NS",
     "CAMS.NS", "COFORGE.NS","HAL.NS","KEI.NS"
