@@ -108,7 +108,17 @@ def analyze(symbol):
             dfs[tf] = df
 
     if len(dfs) < 3:
-        return None
+    return {
+        "Symbol": symbol.replace(".NS","").replace("^",""),
+        "CMP": None,
+        "1m ST": "No Data",
+        "3m ST": "No Data",
+        "15m ST": "No Data",
+        "BB 1m": "NO_BB",
+        "BB 3m": "NO_BB",
+        "Final Signal": "No Data"
+    }
+
 
     signals = {}
     bb_1m = bb_3m = "NO_BB"
@@ -162,10 +172,20 @@ for s in stock_list:
         rows.append(res)
 
 df = pd.DataFrame(rows)
+
+if df.empty or "Final Signal" not in df.columns:
+    st.error("❌ No valid signals generated. Check data availability.")
+    st.stop()
+
 st.dataframe(df, use_container_width=True)
 
 # ===================== ALERT =====================
-alerts = df[df["Final Signal"].str.contains("BUY|SELL", na=False)]
+alerts = df[
+    df["Final Signal"]
+    .astype(str)
+    .str.contains("BUY|SELL", case=False, na=False)
+]
+
 
 if not alerts.empty:
     st.warning("🚨 VALID TRIPLE ST + BB ALERTS 🚨")
@@ -184,4 +204,5 @@ if not alerts.empty:
             send_telegram(msg)
 
 st.caption(f"⏰ Last Updated: {datetime.now().strftime('%d-%m-%Y %H:%M:%S')}")
+
 
