@@ -149,8 +149,8 @@ def analyze(symbol):
 
 # ===================== TELEGRAM =====================
 def send_telegram(msg):
-    token = "YOUR_BOT_TOKEN"
-    chat_id = "YOUR_CHAT_ID"
+    token = "7735892458:AAELFRclang2MgJwO2Rd9RRwNmoll1LzlFg"
+    chat_id = "5073531512"
     url = f"https://api.telegram.org/bot{token}/sendMessage"
     requests.post(url, data={"chat_id":chat_id,"text":msg})
 
@@ -184,3 +184,4 @@ if not alerts.empty:
             send_telegram(msg)
 
 st.caption(f"⏰ Last Updated: {datetime.now().strftime('%d-%m-%Y %H:%M:%S')}")
+
