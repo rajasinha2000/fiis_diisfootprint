@@ -1,320 +1,185 @@
 import streamlit as st
-import pandas as pd
 import yfinance as yf
-import datetime
+import pandas as pd
 import requests
-import os
-import json
+from datetime import datetime
+from streamlit_autorefresh import st_autorefresh
 
-# --- CONFIG ---
-REFRESH_INTERVAL_MIN = 5
-ENABLE_TELEGRAM = True
-TELEGRAM_TOKEN = "7735892458:AAELFRclang2MgJwO2Rd9RRwNmoll1LzlFg"
-TELEGRAM_CHAT_ID = "5073531512"
-ALERT_LOG_FILE = "alert_log.json"
+# ===================== CONFIG =====================
+st.set_page_config(page_title="Market Dashboard", layout="wide")
+st_autorefresh(interval=900_000, key="refresh_15min")  # Refresh every 15 mins
 
-st.set_page_config(layout="wide", page_title="FII/DII Footprint Screener")
-st.title("\U0001F4CA FII/DII Footprint Screener Dashboard")
-st.caption(f"\U0001F501 Auto-refresh every {REFRESH_INTERVAL_MIN} minutes.")
+# ===================== ALERT STATUS INDICATOR =====================
+if "alerts_enabled" not in st.session_state:
+    st.session_state.alerts_enabled = False
 
-symbols = [    "RELIANCE", "HDFCBANK", "INFY", "TCS", "ICICIBANK",
-    "LT", "SBIN", "KOTAKBANK", "AXISBANK", "BSE","SIEMENS",
-    "BHARTIARTL", "TITAN", "ASIANPAINT", "OFSS", "MARUTI",
-    "BOSCHLTD", "TRENT", "NESTLEIND", "ULTRACEMCO", "MCX",
-    "CAMS", "COFORGE","HAL","KEI"
-]
+def alert_status_badge(enabled: bool):
+    if enabled:
+        return """
+        <div style="padding:8px; border-radius:10px; background-color:#d4edda; color:#155724; 
+                    font-weight:bold; font-size:18px; width:100%; text-align:center;">
+            🔔 Telegram Alerts: ON ✅
+        </div>
+        """
+    else:
+        return """
+        <div style="padding:8px; border-radius:10px; background-color:#f8d7da; color:#721c24; 
+                    font-weight:bold; font-size:18px; width:100%; text-align:center;">
+            🔕 Telegram Alerts: OFF ❌
+        </div>
+        """
 
-# Load alert log to prevent duplicate alerts
-if os.path.exists(ALERT_LOG_FILE):
-    with open(ALERT_LOG_FILE, "r") as f:
-        alert_log = json.load(f)
-else:
-    alert_log = {}
+st.markdown(alert_status_badge(st.session_state.alerts_enabled), unsafe_allow_html=True)
 
-def save_alert_log(log):
-    with open(ALERT_LOG_FILE, "w") as f:
-        json.dump(log, f)
+# ===================== TITLE =====================
+st.title("📈 Triple Supertrend Screener (1m, 3m, 15m) + 3m SMA Signals")
 
-@st.cache_data(ttl=REFRESH_INTERVAL_MIN * 60)
-def fetch_data(symbol):
-    try:
-        df = yf.download(symbol + ".NS", period="15d", interval="1d", progress=False, auto_adjust=True)
-        if df.empty or len(df) < 10:
-            return None
+# ===================== SIDEBAR ALERT CONTROL =====================
+st.sidebar.header("⚙️ Alert Controls")
+if st.sidebar.button("▶️ Start Alerts"):
+    st.session_state.alerts_enabled = True
+    st.sidebar.success("Telegram Alerts ENABLED ✅")
 
-        df["EMA20"] = df["Close"].ewm(span=20).mean()
-        df["MACD"] = df["Close"].ewm(span=12).mean() - df["Close"].ewm(span=26).mean()
-        df["Signal"] = df["MACD"].ewm(span=9).mean()
-        df["RSI"] = compute_rsi(df["Close"])
+if st.sidebar.button("⏹️ Stop Alerts"):
+    st.session_state.alerts_enabled = False
+    st.sidebar.warning("Telegram Alerts DISABLED ❌")
 
-        prev_close = df["Close"].iloc[-2].item()
-        today_close = df["Close"].iloc[-1].item()
-        today_volume = df["Volume"].iloc[-1].item()
-        avg_volume = df["Volume"].iloc[-6:-1].mean().item()
-        recent_high = df["Close"].iloc[-6:-1].max().item()
+# ===================== STOCK LIST =====================
+index_list = ["^NSEI", "^NSEBANK"]
 
-        delivery_perc = round((today_volume / avg_volume) * 100, 2)
-        breakout = today_close > recent_high
-        volume_surge = today_volume > 1.5 * avg_volume
-        price_strength = today_close > prev_close * 1.01
+crypto_list = ["BTC-USD", "ETH-USD"]
 
-        rsi = df["RSI"].iloc[-1]
-        macd = df["MACD"].iloc[-1]
-        macd_signal = df["Signal"].iloc[-1]
+stock_list = [
+    "HDFCBANK.NS","RELIANCE.NS","MARUTI.NS"
+] + index_list + crypto_list
 
-        rsi_signal = "Overbought" if rsi > 70 else "Oversold" if rsi < 30 else "Neutral"
-        macd_signal_type = "Bullish" if macd > macd_signal else "Bearish"
 
-        long_buildup = today_close > prev_close and today_volume > avg_volume
-        short_buildup = today_close < prev_close and today_volume > avg_volume
+# ===================== SUPER TREND FUNCTION =====================
+def supertrend(df, period=10, multiplier=3):
+    df = df.copy()
+    df['High'] = df['High'].astype(float)
+    df['Low'] = df['Low'].astype(float)
+    df['Close'] = df['Close'].astype(float)
 
-        signal = "BUY" if all([breakout, volume_surge, price_strength, macd > macd_signal]) else \
-                 "SELL" if price_strength and macd < macd_signal else "AVOID"
-        action = "\U0001F4C8 Buy" if signal == "BUY" else "\U0001F4C9 Sell" if signal == "SELL" else "\u23F8\uFE0F Wait"
+    # True Range & ATR
+    df['H-L'] = df['High'] - df['Low']
+    df['H-PC'] = abs(df['High'] - df['Close'].shift(1))
+    df['L-PC'] = abs(df['Low'] - df['Close'].shift(1))
+    df['TR'] = df[['H-L','H-PC','L-PC']].max(axis=1)
+    df['ATR'] = df['TR'].rolling(period).mean()
 
-        alert_key = f"{symbol}_{signal}"
-        if ENABLE_TELEGRAM and signal in ["BUY", "SELL"] and alert_key not in alert_log:
-            msg = f"""\U0001F9E0 *FII/DII Footprint Alert*
-*{symbol}* \u25B6\uFE0F {signal}
-CMP: ₹{today_close:.2f}
-Volume: {int(today_volume):,} (Avg: {int(avg_volume):,})
-Delivery%: {delivery_perc}%
-Breakout: {"\u2705" if breakout else "\u274C"}
-MACD: {macd_signal_type}
-RSI: {rsi_signal}
-Long Buildup: {"\u2705" if long_buildup else "-"}
-Short Buildup: {"\u2705" if short_buildup else "-"}
-Action: {action}"""
-            send_telegram_alert(msg)
-            alert_log[alert_key] = str(datetime.datetime.now())
+    hl2 = (df['High'] + df['Low']) / 2
+    df['Upper Basic'] = hl2 + multiplier * df['ATR']
+    df['Lower Basic'] = hl2 - multiplier * df['ATR']
+    df['Upper Band'] = df['Upper Basic']
+    df['Lower Band'] = df['Lower Basic']
 
+    trend = [True]  # start bullish
+    for i in range(1, len(df)):
+        prev_trend = trend[-1]
+
+        if prev_trend:
+            if df['Close'].iloc[i] < df['Lower Band'].iloc[i-1]:
+                trend.append(False)
+            else:
+                trend.append(True)
+                df.loc[df.index[i], 'Lower Band'] = max(df['Lower Band'].iloc[i], df['Lower Band'].iloc[i-1])
+        else:
+            if df['Close'].iloc[i] > df['Upper Band'].iloc[i-1]:
+                trend.append(True)
+            else:
+                trend.append(False)
+                df.loc[df.index[i], 'Upper Band'] = min(df['Upper Band'].iloc[i], df['Upper Band'].iloc[i-1])
+
+    df['Supertrend'] = trend
+    return df
+
+# ===================== SMA FUNCTION =====================
+def sma_signal(df, period=20):
+    df = df.copy()
+    df["SMA"] = df["Close"].rolling(period).mean()
+    last_close = df["Close"].iloc[-1]
+    last_sma = df["SMA"].iloc[-1]
+
+    if last_close > last_sma:
+        return "📈 SMA Breakout"
+    elif last_close < last_sma:
+        return "📉 SMA Breakdown"
+    else:
+        return "⏸️ Near SMA"
+
+# ===================== DATA FETCH FUNCTION =====================
+@st.cache_data(ttl=900)
+def fetch_data(symbol, interval, lookback="2d"):
+    intervals_to_try = [interval]
+    if interval == "1m": intervals_to_try.append("5m")
+    if interval == "3m": intervals_to_try.append("5m")
+    if interval == "15m": intervals_to_try.append("30m")
+
+    for i in intervals_to_try:
+        try:
+            df = yf.download(symbol, interval=i, period=lookback, progress=False)
+            if not df.empty:
+                if isinstance(df.columns, pd.MultiIndex):
+                    df.columns = df.columns.get_level_values(0)
+                df = df[['High','Low','Close']].astype(float)
+                df = df.tz_localize(None)
+                return df
+        except Exception as e:
+            print(f"{symbol} fetch error ({i}): {e}")
+    return pd.DataFrame()
+
+# ===================== ANALYSIS FUNCTION =====================
+def analyze(symbol):
+    timeframes = {"1m": "2d", "3m": "5d", "15m": "1mo"}
+    dfs = {}
+    for tf, period in timeframes.items():
+        df = fetch_data(symbol, tf, lookback=period)
+        if not df.empty:
+            dfs[tf] = df
+
+    if not dfs:
         return {
-            "Symbol": symbol,
-            "CMP": round(today_close, 2),
-            "Prev Close": round(prev_close, 2),
-            "Avg Volume": int(avg_volume),
-            "Today Vol": int(today_volume),
-            "Delivery %": delivery_perc,
-            "Breakout": breakout,
-            "Vol Surge": volume_surge,
-            "Price Strength": price_strength,
-            "MACD": macd_signal_type,
-            "RSI": rsi_signal,
-            "Long Buildup": "\u2705" if long_buildup else "",
-            "Short Buildup": "\u2705" if short_buildup else "",
-            "Signal": signal,
-            "Action": action
+            "Stock": symbol.replace(".NS","").replace("^",""),
+            "CMP": None,
+            "1m Trend":"No Data",
+            "3m Trend":"No Data",
+            "15m Trend":"No Data",
+            "3m SMA Signal":"No Data",
+            "Final Signal":"⚠️ No Data"
         }
 
-    except Exception:
-        st.warning(f"\u26A0\uFE0F Failed to fetch data for {symbol}")
-        return None
+    signals = {}
+    cmp_price = round(list(dfs.values())[-1]["Close"].iloc[-1], 2)
+    sma_3m = "No Data"
 
-def compute_rsi(series, period=14):
-    delta = series.diff()
-    gain = delta.where(delta > 0, 0)
-    loss = -delta.where(delta < 0, 0)
-    avg_gain = gain.rolling(window=period).mean()
-    avg_loss = loss.rolling(window=period).mean()
-    rs = avg_gain / avg_loss
-    return 100 - (100 / (1 + rs))
+    for tf, df_tf in dfs.items():
+        df_st = supertrend(df_tf, period=10, multiplier=3)
+        last = df_st.iloc[-1]
+        signals[tf] = "🟢 Bullish" if bool(last["Supertrend"]) else "🔴 Bearish"
 
-def send_telegram_alert(message):
-    try:
-        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-        payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message, "parse_mode": "Markdown"}
-        requests.post(url, data=payload)
-    except Exception:
-        st.warning("\u26A0\uFE0F Telegram alert failed.")
+        if tf == "3m":
+            sma_3m = sma_signal(df_tf, period=20)
 
-# --- MAIN VIEW ---
-st.markdown("### \U0001F50D Screener Results")
-results = []
+    if len(set(signals.values())) == 1:
+        final_signal = f"✅ Triple Supertrend {list(signals.values())[0]}"
+    else:
+        final_signal = "⏸️ Mixed"
 
-for symbol in symbols:
-    row = fetch_data(symbol)
-    if row:
-        results.append(row)
+    for tf in ["1m","3m","15m"]:
+        if tf not in signals: signals[tf] = "No Data"
 
-save_alert_log(alert_log)
-
-if results:
-    df = pd.DataFrame(results)
-
-    def highlight_missing(val):
-        return "background-color: yellow" if pd.isna(val) else ""
-
-    styled_df = df.style.map(highlight_missing)
-    st.dataframe(styled_df, use_container_width=True)
-
-    st.download_button("\U0001F4C5 Download CSV", data=df.to_csv(index=False), file_name="fii_dii_signals.csv")
-else:
-    st.warning("\u26A0\uFE0F No data returned or API limit reached.")
-
-# --- Auto-refresh JS ---
-st.caption(f"\U0001F552 Last updated: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-
-st.markdown(f"""
-    <script>
-        setTimeout(function() {{
-            window.location.reload();
-        }}, {REFRESH_INTERVAL_MIN * 60 * 1000});
-    </script>
-""", unsafe_allow_html=True)
-# --- DOUBLE BREAKOUT SCREENER ---
-import os
-import streamlit as st
-import yfinance as yf
-import pandas as pd
-import numpy as np
-import requests
-from datetime import datetime, timedelta
-import pytz
-from streamlit_autorefresh import st_autorefresh
-import smtplib
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
-
-# ========== CONFIGURATION ==========
-st.set_page_config(page_title="Market Dashboard", layout="wide")
-st_autorefresh(interval=900000, key="refresh_15min")  # Auto-refresh every 15 mins
-st.title("📈 Intraday Breakout Screener with MACD (Live)")
-
-# ========== STOCK LIST ==========
-index_list = ["^NSEI", "^NSEBANK"]
-stock_list = [
-    "RELIANCE.NS", "HDFCBANK.NS", "INFY.NS", "TCS.NS", "ICICIBANK.NS",
-    "LT.NS", "SBIN.NS", "KOTAKBANK.NS", "AXISBANK.NS", "BSE.NS","SIEMENS.NS"
-    "BHARTIARTL.NS", "TITAN.NS", "ASIANPAINT.NS", "OFSS.NS", "MARUTI.NS",
-    "BOSCHLTD.NS", "TRENT.NS", "NESTLEIND.NS", "ULTRACEMCO.NS", "MCX.NS",
-    "CAMS.NS", "COFORGE.NS","HAL.NS","KEI.NS"
-] + index_list
-
-# ========== FUNCTIONS ==========
-def fetch_data(symbol):
-    tz = pytz.timezone('Asia/Kolkata')
-    now = datetime.now(tz)
-    today = now.date()
-    start_date = today - timedelta(days=7)
-
-    df_15m = yf.download(symbol, interval="15m", start=start_date, end=now)
-    df_15m = df_15m.tz_localize(None)
-    df_15m.index = df_15m.index.tz_localize('UTC').tz_convert('Asia/Kolkata')
-
-    df_day = yf.download(symbol, interval="1d", start=start_date, end=now)
-
-    return df_15m, df_day
-
-def analyze(symbol):
-    try:
-        df_15m, df_day = fetch_data(symbol)
-    except Exception as e:
-        print(f"Data fetch failed for {symbol}: {e}")
-        return None
-
-    result = {
-        "Stock": symbol.replace(".NS", "").replace("^", ""),
-        "CMP": 0,
-        "Today Breakout": "",
-        "2-Day Breakout": "",
-        "Breakout Type": "",
-        "Trend": "",
-        "MACD": "",
-        "Signal": "",
-        "MACD Trend": ""
+    return {
+        "Stock": symbol.replace(".NS","").replace("^",""),
+        "CMP": cmp_price,
+        "1m Trend": signals["1m"],
+        "3m Trend": signals["3m"],
+        "15m Trend": signals["15m"],
+        "3m SMA Signal": sma_3m,
+        "Final Signal": final_signal
     }
 
-    if df_15m.empty or df_day.empty:
-        return None
-
-    today_date = df_15m.index[-1].date()
-    df_today = df_15m[df_15m.index.date == today_date]
-    first_15m = df_today.between_time("09:15", "09:30")
-
-    if first_15m.empty or df_today.empty:
-        return None
-
-    high_15m = float(first_15m['High'].max())
-    low_15m = float(first_15m['Low'].min())
-    current_price = float(df_today["Close"].iloc[-1])
-    result["CMP"] = round(current_price, 2)
-
-    df_2d = df_day[df_day.index.date < today_date].tail(2)
-    if df_2d.empty:
-        return None
-
-    high_2d = float(df_2d["High"].max())
-    low_2d = float(df_2d["Low"].min())
-
-    if current_price > high_15m:
-        result["Today Breakout"] = "🔼 Above 15m High"
-    elif current_price < low_15m:
-        result["Today Breakout"] = "🔽 Below 15m Low"
-    if current_price > high_2d:
-        result["2-Day Breakout"] = "📈 Above 2-Day High"
-    elif current_price < low_2d:
-        result["2-Day Breakout"] = "📉 Below 2-Day Low"
-
-    if result["Today Breakout"] and result["2-Day Breakout"]:
-        result["Breakout Type"] = "✅ Double Breakout"
-    elif result["Today Breakout"]:
-        result["Breakout Type"] = result["Today Breakout"]
-    elif result["2-Day Breakout"]:
-        result["Breakout Type"] = result["2-Day Breakout"]
-
-    df_today["EMA12"] = df_today["Close"].ewm(span=12, adjust=False).mean()
-    df_today["EMA26"] = df_today["Close"].ewm(span=26, adjust=False).mean()
-    df_today["MACD"] = df_today["EMA12"] - df_today["EMA26"]
-    df_today["Signal"] = df_today["MACD"].ewm(span=9, adjust=False).mean()
-
-    macd = df_today["MACD"].iloc[-1]
-    signal = df_today["Signal"].iloc[-1]
-    result["MACD"] = round(macd, 2)
-    result["Signal"] = round(signal, 2)
-
-    if macd > signal:
-        result["MACD Trend"] = "🟢 Bullish"
-    elif macd < signal:
-        result["MACD Trend"] = "🔴 Bearish"
-    else:
-        result["MACD Trend"] = "⚪️ Sideways"
-
-    if current_price > high_15m and current_price > high_2d:
-        result["Trend"] = "🚀 Very Bullish"
-    elif current_price > high_15m or current_price > high_2d:
-        result["Trend"] = "📈 Bullish"
-    elif current_price < low_15m and current_price < low_2d:
-        result["Trend"] = "🔻 Very Bearish"
-    elif current_price < low_15m or current_price < low_2d:
-        result["Trend"] = "📉 Bearish"
-    else:
-        result["Trend"] = "⏸️ Sideways"
-
-    return result
-
-def send_email_alert(stock):
-    sender_email = "rajasinha2000@gmail.com"
-    receiver_email = "mdrinfotech79@gmail.com"
-    password = "hefy otrq yfji ictv"
-
-    subject = f"🚨 DOUBLE BREAKOUT in {stock}"
-    body = f"The stock {stock} has triggered a ✅ DOUBLE BREAKOUT."
-
-    message = MIMEMultipart()
-    message["From"] = sender_email
-    message["To"] = receiver_email
-    message["Subject"] = subject
-    message.attach(MIMEText(body, "plain"))
-
-    try:
-        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
-            server.login(sender_email, password)
-            server.sendmail(sender_email, receiver_email, message.as_string())
-        print(f"✅ Email sent for {stock}")
-    except Exception as e:
-        print(f"❌ Email sending failed: {e}")
-
-# ========== TELEGRAM ALERT FUNCTION ==========
+# ===================== TELEGRAM ALERT FUNCTION =====================
 def send_telegram_alert(message):
     token = "7735892458:AAELFRclang2MgJwO2Rd9RRwNmoll1LzlFg"
     chat_id = "5073531512"
@@ -325,69 +190,84 @@ def send_telegram_alert(message):
     except:
         pass
 
-# ========== MAIN ==========
+# ===================== MAIN LOOP =====================
 results = []
-for stock in stock_list:
-    print(f"Checking {stock}...")
-    res = analyze(stock)
-    if res:
+progress_bar = st.progress(0)
+status_text = st.empty()
+last_refresh = st.empty()
+
+for i, stock in enumerate(stock_list, 1):
+    status_text.text(f"Processing {i}/{len(stock_list)}: {stock}...")
+    try:
+        res = analyze(stock)
         results.append(res)
+    except Exception as e:
+        print(f"{stock} error: {e}")
+    progress_bar.progress(i / len(stock_list))
+
+progress_bar.empty()
+status_text.empty()
+last_refresh.markdown(f"⏰ Last refreshed: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
 df_result = pd.DataFrame(results)
 
-if not df_result.empty and "Breakout Type" in df_result.columns:
-    df_result = df_result[df_result["Breakout Type"] != ""]
+if not df_result.empty:
+    # ===================== COLOR-CODED STYLING =====================
+    def highlight_trend(val):
+        if "Bullish" in val: return "color: green; font-weight:bold"
+        elif "Bearish" in val: return "color: red; font-weight:bold"
+        elif "Breakout" in val: return "color: green; font-weight:bold"
+        elif "Breakdown" in val: return "color: red; font-weight:bold"
+        elif "Mixed" in val: return "color: orange; font-weight:bold"
+        elif "No Data" in val: return "color: gray; font-style:italic"
+        else: return ""
 
-    priority = {"🚀 Very Bullish": 1, "🔻 Very Bearish": 2, "📈 Bullish": 3, "📉 Bearish": 4, "⏸️ Sideways": 5}
-    df_result["SortKey"] = df_result["Trend"].map(priority)
-    df_result = df_result.sort_values("SortKey").drop(columns="SortKey")
+    st.dataframe(
+        df_result.style.applymap(
+            highlight_trend,
+            subset=["1m Trend", "3m Trend", "15m Trend", "3m SMA Signal", "Final Signal"]
+        ),
+        use_container_width=True
+    )
 
-    st.dataframe(df_result, use_container_width=True)
+    # ===================== COMBINED ALERTS =====================
+    alerts = df_result[
+    df_result["Final Signal"].str.contains("Triple Supertrend")
+]
 
+
+    if st.checkbox("Show Alerts Only"):
+        st.dataframe(alerts, use_container_width=True)
+
+    if not alerts.empty:
+        st.warning("🚨 Combined Alerts Found!")
+        for _, row in alerts.iterrows():
+            alert_msg = (
+                f"🚨 TRIPLE SUPERTREND ALERT 🚨\n\n"
+                f"📢 Symbol: {row['Stock']}\n"
+                f"💰 CMP: {row['CMP']}\n"
+                f"📈 Signal: {row['Final Signal']}\n"
+                f"⏱ Timeframes: 1m | 3m | 15m"
+            )
+            st.write(alert_msg.replace("\n", "  |  "))
+
+            if st.session_state.alerts_enabled:
+                send_telegram_alert(alert_msg)
+
+    # ===================== DOWNLOAD OPTION =====================
     csv = df_result.to_csv(index=False).encode("utf-8")
-    st.download_button("📂 Download Breakout CSV", data=csv, file_name="breakout_screener.csv", mime="text/csv")
+    st.download_button(
+        "📂 Download Screener CSV",
+        data=csv,
+        file_name="supertrend_screener.csv",
+        mime="text/csv"
+    )
 
-    EMAIL_LOG_FILE = "emailed_stocks.txt"
-    def load_emailed_stocks():
-        if os.path.exists(EMAIL_LOG_FILE):
-            with open(EMAIL_LOG_FILE, "r") as f:
-                return set(f.read().splitlines())
-        return set()
-
-    def save_emailed_stock(stock):
-        with open(EMAIL_LOG_FILE, "a") as f:
-            f.write(f"{stock}\n")
-
-    emailed_stocks = load_emailed_stocks()
-    double_breakouts = df_result[df_result["Breakout Type"] == "✅ Double Breakout"]
-
-    if not double_breakouts.empty:
-        st.markdown("""
-            <div style='padding:20px; background-color:#ffcccc; border:3px solid red; border-radius:10px; animation: flash 1s infinite; text-align:center; font-size:24px; font-weight:bold;'>
-                🚨 DOUBLE BREAKOUT ALERT! 🚨
-            </div>
-            <style>
-            @keyframes flash {
-                0% {opacity: 1;}
-                50% {opacity: 0.5;}
-                100% {opacity: 1;}
-            }
-            </style>
-        """, unsafe_allow_html=True)
-        st.dataframe(double_breakouts)
-
-        for row in double_breakouts.itertuples():
-            if row.Stock not in emailed_stocks:
-    #==         send_email_alert(row.Stock)
-                send_telegram_alert(f"🟢 DOUBLE BREAKOUT in {row.Stock} ✅ CMP: {row.CMP}")
-                save_emailed_stock(row.Stock)
-                emailed_stocks.add(row.Stock)
-
-    if st.button("🔄 Reset Email Log"):
-        if os.path.exists(EMAIL_LOG_FILE):
-            os.remove(EMAIL_LOG_FILE)
-            st.success("✅ Email log file cleared.")
-        else:
-            st.info("ℹ️ No email log file found.")
 else:
-    st.warning("⚠️ No valid breakout data found.")
+    st.warning("⚠️ No valid data found.")
+
+
+
+
+
+
