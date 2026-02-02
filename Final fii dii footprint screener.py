@@ -100,28 +100,30 @@ def fetch_data(symbol, interval, period):
 
 # ===================== ANALYZE =====================
 def analyze(symbol):
-    tfs = {"1m":"2d", "3m":"5d", "15m":"1mo"}
+    tfs = {"1m": "2d", "3m": "5d", "15m": "1mo"}
     dfs = {}
+
     for tf, per in tfs.items():
         df = fetch_data(symbol, tf, per)
         if not df.empty:
             dfs[tf] = df
 
+    # 🔒 SAFE RETURN (no None ever)
     if len(dfs) < 3:
-    return {
-        "Symbol": symbol.replace(".NS","").replace("^",""),
-        "CMP": None,
-        "1m ST": "No Data",
-        "3m ST": "No Data",
-        "15m ST": "No Data",
-        "BB 1m": "NO_BB",
-        "BB 3m": "NO_BB",
-        "Final Signal": "No Data"
-    }
-
+        return {
+            "Symbol": symbol.replace(".NS", "").replace("^", ""),
+            "CMP": None,
+            "1m ST": "No Data",
+            "3m ST": "No Data",
+            "15m ST": "No Data",
+            "BB 1m": "NO_BB",
+            "BB 3m": "NO_BB",
+            "Final Signal": "No Data"
+        }
 
     signals = {}
-    bb_1m = bb_3m = "NO_BB"
+    bb_1m = "NO_BB"
+    bb_3m = "NO_BB"
 
     for tf, df in dfs.items():
         st_df = supertrend(df)
@@ -129,25 +131,29 @@ def analyze(symbol):
 
         if tf == "1m":
             bb_1m = bollinger_signal(df)
-        if tf == "3m":
+        elif tf == "3m":
             bb_3m = bollinger_signal(df)
 
     cmp_price = round(dfs["15m"]["Close"].iloc[-1], 2)
 
+    # ================= FINAL LOGIC =================
     if len(set(signals.values())) == 1:
         trend = list(signals.values())[0]
 
         if trend == "🟢 Bullish" and (bb_1m == "BB_UP" or bb_3m == "BB_UP"):
             final = "🚀 BUY | Triple ST + BB Breakout"
+
         elif trend == "🔴 Bearish" and (bb_1m == "BB_DOWN" or bb_3m == "BB_DOWN"):
             final = "🔻 SELL | Triple ST + BB Breakdown"
+
         else:
             final = "⏸️ Triple ST (No BB)"
+
     else:
         final = "⏸️ Mixed"
 
     return {
-        "Symbol": symbol.replace(".NS","").replace("^",""),
+        "Symbol": symbol.replace(".NS", "").replace("^", ""),
         "CMP": cmp_price,
         "1m ST": signals["1m"],
         "3m ST": signals["3m"],
@@ -156,6 +162,7 @@ def analyze(symbol):
         "BB 3m": bb_3m,
         "Final Signal": final
     }
+
 
 # ===================== TELEGRAM =====================
 def send_telegram(msg):
@@ -204,5 +211,6 @@ if not alerts.empty:
             send_telegram(msg)
 
 st.caption(f"⏰ Last Updated: {datetime.now().strftime('%d-%m-%Y %H:%M:%S')}")
+
 
 
