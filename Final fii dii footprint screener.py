@@ -6,7 +6,7 @@ from datetime import datetime
 from streamlit_autorefresh import st_autorefresh
 
 # ===================== CONFIG =====================
-st.set_page_config(page_title="Market Dashboard", layout="wide")
+st.set_page_config(page_title="Crypto Momentum Dashboard", layout="wide")
 st_autorefresh(interval=900_000, key="refresh_15min")
 
 # ===================== ALERT STATE =====================
@@ -27,7 +27,7 @@ def alert_status_badge(enabled):
 st.markdown(alert_status_badge(st.session_state.alerts_enabled), unsafe_allow_html=True)
 
 # ===================== TITLE =====================
-st.title("📈 Triple Supertrend + Bollinger Breakout Screener")
+st.title("🚀 BTC & ETH – Triple Supertrend + Bollinger Screener")
 
 # ===================== SIDEBAR =====================
 st.sidebar.header("⚙️ Alert Control")
@@ -38,12 +38,8 @@ if st.sidebar.button("▶️ Start Alerts"):
 if st.sidebar.button("⏹️ Stop Alerts"):
     st.session_state.alerts_enabled = False
 
-# ===================== SYMBOL LIST =====================
-stock_list = [
-    "HDFCBANK.NS", "RELIANCE.NS", "MARUTI.NS",
-    "^NSEI", "^NSEBANK",
-    "BTC-USD", "ETH-USD"
-]
+# ===================== SYMBOLS =====================
+symbols = ["BTC-USD", "ETH-USD"]
 
 # ===================== SUPERTREND =====================
 def supertrend(df, period=10, multiplier=3):
@@ -63,13 +59,12 @@ def supertrend(df, period=10, multiplier=3):
     trend = [True]
     for i in range(1, len(df)):
         if trend[-1]:
-            trend.append(df["Close"].iloc[i] >= df["Lower"].iloc[i-1])
+            trend.append(df["Close"].iloc[i] >= df["Lower"].iloc[i - 1])
         else:
-            trend.append(df["Close"].iloc[i] > df["Upper"].iloc[i-1])
+            trend.append(df["Close"].iloc[i] > df["Upper"].iloc[i - 1])
 
     df["Supertrend"] = trend
     return df
-
 
 # ===================== BOLLINGER =====================
 def bollinger_signal(df, length=20, mult=1):
@@ -100,130 +95,103 @@ def fetch_data(symbol, interval, period):
         df = yf.download(symbol, interval=interval, period=period, progress=False)
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = df.columns.get_level_values(0)
-        df = df[["High","Low","Close"]].dropna()
-        return df
+        return df[["High", "Low", "Close"]].dropna()
     except:
         return pd.DataFrame()
 
 # ===================== ANALYZE =====================
 def analyze(symbol):
     tfs = {
-    "1m": "1d",
-    "3m": "5d",     # internally 5m use karega
-    "15m": "1mo"
-}
+        "5m": "7d",
+        "15m": "1mo",
+        "1h": "3mo"
+    }
 
     dfs = {}
-
     for tf, per in tfs.items():
         df = fetch_data(symbol, tf, per)
         if not df.empty:
             dfs[tf] = df
 
-    # 🔒 SAFE RETURN (no None ever)
     if len(dfs) < 3:
         return {
-            "Symbol": symbol.replace(".NS", "").replace("^", ""),
+            "Symbol": symbol.replace("-USD", ""),
             "CMP": None,
-            "1m ST": "No Data",
-            "3m ST": "No Data",
+            "5m ST": "No Data",
             "15m ST": "No Data",
-            "BB 1m": "NO_BB",
-            "BB 3m": "NO_BB",
+            "1h ST": "No Data",
             "Final Signal": "No Data"
         }
 
     signals = {}
-    bb_1m = "NO_BB"
-    bb_3m = "NO_BB"
+    bb_5m = "NO_BB"
 
     for tf, df in dfs.items():
         st_df = supertrend(df)
-        signals[tf] = "🟢 Bullish" if st_df["Supertrend"].iloc[-1] else "🔴 Bearish"
+        signals[tf] = "BULL" if st_df["Supertrend"].iloc[-1] else "BEAR"
 
-        if tf == "1m":
-            bb_1m = bollinger_signal(df)
-        elif tf == "3m":
-            bb_3m = bollinger_signal(df)
+        if tf == "5m":
+            bb_5m = bollinger_signal(df)
 
     cmp_price = round(dfs["15m"]["Close"].iloc[-1], 2)
 
-    # ================= FINAL LOGIC =================
-    if len(set(signals.values())) == 1:
-        trend = list(signals.values())[0]
+    bull = list(signals.values()).count("BULL")
+    bear = list(signals.values()).count("BEAR")
 
-        if trend == "🟢 Bullish" and (bb_1m == "BB_UP" or bb_3m == "BB_UP"):
-            final = "🚀 BUY | Triple ST + BB Breakout"
-
-        elif trend == "🔴 Bearish" and (bb_1m == "BB_DOWN" or bb_3m == "BB_DOWN"):
-            final = "🔻 SELL | Triple ST + BB Breakdown"
-
-        else:
-            final = "⏸️ Triple ST (No BB)"
-
+    if bull == 3 and bb_5m == "BB_UP":
+        final = "🚀 BUY (Crypto Momentum)"
+    elif bear == 3 and bb_5m == "BB_DOWN":
+        final = "🔻 SELL (Crypto Breakdown)"
+    elif bull >= 2:
+        final = "🟢 Bullish Bias"
+    elif bear >= 2:
+        final = "🔴 Bearish Bias"
     else:
-        final = "⏸️ Mixed"
+        final = "⏸️ Sideways"
 
     return {
-        "Symbol": symbol.replace(".NS", "").replace("^", ""),
+        "Symbol": symbol.replace("-USD", ""),
         "CMP": cmp_price,
-        "1m ST": signals["1m"],
-        "3m ST": signals["3m"],
+        "5m ST": signals["5m"],
         "15m ST": signals["15m"],
-        "BB 1m": bb_1m,
-        "BB 3m": bb_3m,
+        "1h ST": signals["1h"],
         "Final Signal": final
     }
-
 
 # ===================== TELEGRAM =====================
 def send_telegram(msg):
     token = "7735892458:AAELFRclang2MgJwO2Rd9RRwNmoll1LzlFg"
     chat_id = "5073531512"
     url = f"https://api.telegram.org/bot{token}/sendMessage"
-    requests.post(url, data={"chat_id":chat_id,"text":msg})
+    requests.post(url, data={"chat_id": chat_id, "text": msg})
 
 # ===================== MAIN =====================
 rows = []
-for s in stock_list:
-    res = analyze(s)
-    if res:
-        rows.append(res)
+for s in symbols:
+    rows.append(analyze(s))
 
 df = pd.DataFrame(rows)
 
-if df.empty or "Final Signal" not in df.columns:
-    st.error("❌ No valid signals generated. Check data availability.")
-    st.stop()
-
 st.dataframe(df, use_container_width=True)
 
-# ===================== ALERT =====================
-alerts = df[
-    df["Final Signal"]
-    .astype(str)
-    .str.contains("BUY|SELL", case=False, na=False)
-]
-
+# ===================== ALERTS =====================
+alerts = df[df["Final Signal"].str.contains("BUY|SELL", case=False, na=False)]
 
 if not alerts.empty:
-    st.warning("🚨 VALID TRIPLE ST + BB ALERTS 🚨")
+    st.warning("🚨 STRONG CRYPTO SIGNALS 🚨")
 
     for _, r in alerts.iterrows():
         msg = (
-            f"🚨 TRIPLE ST + BB ALERT 🚨\n\n"
+            f"🚨 CRYPTO ALERT 🚨\n\n"
             f"📌 {r['Symbol']}\n"
             f"💰 CMP: {r['CMP']}\n"
-            f"📈 {r['Final Signal']}\n"
-            f"⏱ 1m | 3m | 15m"
+            f"{r['Final Signal']}\n"
+            f"⏱ 5m | 15m | 1h"
         )
-        st.write(msg.replace("\n"," | "))
+
+        st.write(msg.replace("\n", " | "))
 
         if st.session_state.alerts_enabled:
             send_telegram(msg)
 
 st.caption(f"⏰ Last Updated: {datetime.now().strftime('%d-%m-%Y %H:%M:%S')}")
-
-
-
-
