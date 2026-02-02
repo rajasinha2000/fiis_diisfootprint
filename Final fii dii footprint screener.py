@@ -158,12 +158,17 @@ def analyze(symbol):
         "Final Signal": final
     }
 
-# ===================== TELEGRAM =====================
-def send_telegram(msg):
+# ===================== TELEGRAM ALERT FUNCTION =====================
+def send_telegram_alert(message):
     token = "7735892458:AAELFRclang2MgJwO2Rd9RRwNmoll1LzlFg"
-    chat_id ="5073531512"
+    chat_id = "5073531512"
     url = f"https://api.telegram.org/bot{token}/sendMessage"
-    requests.post(url, data={"chat_id": chat_id, "text": msg})
+    payload = {"chat_id": chat_id, "text": message}
+    try:
+        requests.post(url, data=payload)
+    except:
+        pass
+
 
 # ===================== MAIN =====================
 rows = []
@@ -195,3 +200,4 @@ if not alerts.empty:
             send_telegram(msg)
 
 st.caption(f"⏰ Last Updated: {datetime.now().strftime('%d-%m-%Y %H:%M:%S')}")
+
