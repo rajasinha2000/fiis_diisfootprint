@@ -48,21 +48,28 @@ stock_list = [
 # ===================== SUPERTREND =====================
 def supertrend(df, period=10, multiplier=3):
     df = df.copy()
-    df["TR"] = df[["High","Low","Close"]].max(axis=1) - df[["High","Low","Close"]].min(axis=1)
+
+    df["H-L"] = df["High"] - df["Low"]
+    df["H-PC"] = abs(df["High"] - df["Close"].shift())
+    df["L-PC"] = abs(df["Low"] - df["Close"].shift())
+
+    df["TR"] = df[["H-L", "H-PC", "L-PC"]].max(axis=1)
     df["ATR"] = df["TR"].rolling(period).mean()
+
     hl2 = (df["High"] + df["Low"]) / 2
-    df["UB"] = hl2 + multiplier * df["ATR"]
-    df["LB"] = hl2 - multiplier * df["ATR"]
+    df["Upper"] = hl2 + multiplier * df["ATR"]
+    df["Lower"] = hl2 - multiplier * df["ATR"]
 
     trend = [True]
     for i in range(1, len(df)):
         if trend[-1]:
-            trend.append(df["Close"].iloc[i] >= df["LB"].iloc[i-1])
+            trend.append(df["Close"].iloc[i] >= df["Lower"].iloc[i-1])
         else:
-            trend.append(df["Close"].iloc[i] > df["UB"].iloc[i-1])
+            trend.append(df["Close"].iloc[i] > df["Upper"].iloc[i-1])
 
     df["Supertrend"] = trend
     return df
+
 
 # ===================== BOLLINGER =====================
 def bollinger_signal(df, length=20, mult=1):
@@ -100,7 +107,12 @@ def fetch_data(symbol, interval, period):
 
 # ===================== ANALYZE =====================
 def analyze(symbol):
-    tfs = {"1m": "2d", "3m": "5d", "15m": "1mo"}
+    tfs = {
+    "1m": "1d",
+    "3m": "5d",     # internally 5m use karega
+    "15m": "1mo"
+}
+
     dfs = {}
 
     for tf, per in tfs.items():
@@ -211,6 +223,7 @@ if not alerts.empty:
             send_telegram(msg)
 
 st.caption(f"⏰ Last Updated: {datetime.now().strftime('%d-%m-%Y %H:%M:%S')}")
+
 
 
 
